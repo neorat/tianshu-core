@@ -1,0 +1,258 @@
+# 天枢银行核心系统群 — 全景上下文映射
+# 定义各子系统（有界上下文）的职责边界、分类和交互关系
+
+landscape:
+  name: "TianshuBankingPlatform"
+  chinese_name: "天枢银行核心系统群"
+  description: "覆盖银行核心业务的微服务系统群，每个系统对应一个有界上下文"
+
+# ═══════════════════════════════════════════════════════════
+# 一、系统定义与职责边界
+# ═══════════════════════════════════════════════════════════
+
+contexts:
+
+  # ── 交易域 ──────────────────────────────────────────────
+  - name: "Transaction"
+    chinese_name: "交易系统"
+    classification: "core"
+    description: >
+      即时金融交易（转账、消费、取现、代收代付等）的统一入口和生命周期管理。
+      负责交易受理、交易路由、交易状态机推进，是连接前端渠道与后端处理的枢纽。
+      注意：信贷类业务（进件→审批→放款→还款）由信贷流程管理系统独立承载，
+      不经过本系统。
+    core_capabilities:
+      - 即时金融交易受理与参数校验（转账、消费、取现、代收代付）
+      - 交易路由（根据交易类型分发到支付等下游）
+      - 交易状态机管理（受理→处理中→成功/失败/超时）
+      - 交易流水记录与查询
+      - 幂等控制（防重复提交）
+    boundary_exclusions:
+      - "信贷类业务流程（由 LoanProcess 承载）"
+      - "产品定义与参数管理（由 ProductCenter 承载）"
+    key_aggregates:
+      - "Transaction（交易）"
+      - "TransactionFlow（交易流水）"
+
+  # ── 支付域 ──────────────────────────────────────────────
+  - name: "Payment"
+    chinese_name: "支付系统"
+    classification: "core"
+    description: >
+      支付指令的编排、路由与执行。对接内部账务系统和外部支付渠道，
+      完成资金的实际划转。
+    core_capabilities:
+      - 支付指令生成与编排（拆单、合单）
+      - 支付渠道路由（内部转账 / 银联 / 网联 / 跨境）
+      - 支付状态管理与异步回调处理
+      - 支付幂等与防重
+      - 退款/冲正处理
+    key_aggregates:
+      - "PaymentOrder（支付单）"
+      - "PaymentChannel（支付渠道）"
+      - "Refund（退款单）"
+
+  # ── 账务域 ──────────────────────────────────────────────
+  - name: "Accounting"
+    chinese_name: "账务系统"
+    classification: "core"
+    description: >
+      银行的"账本"。基于复式记账法管理所有账户的余额变动，
+      确保借贷平衡，提供账务流水查询。
+    core_capabilities:
+      - 复式记账（每笔交易至少一借一贷）
+      - 账户余额管理（可用余额、冻结余额、在途余额）
+      - 账务流水记录（不可篡改）
+      - 日终/月终结转
+      - 内部户/客户户/过渡户管理
+    key_aggregates:
+      - "Account（账户）"
+      - "AccountingEntry（记账分录）"
+      - "AccountingVoucher（记账凭证）"
+    invariants:
+      - "每笔凭证借方合计 = 贷方合计（借贷平衡）"
+      - "账户余额 = 期初余额 + 借方发生额 - 贷方发生额"
+      - "账务流水一旦生成不可修改，只能冲正"
+
+  # ── 清结算域 ────────────────────────────────────────────
+  - name: "Clearing"
+    chinese_name: "清结算系统"
+    classification: "core"
+    description: >
+      交易完成后的清分和结算。将交易拆解为各参与方的应收应付，
+      完成轧差后驱动账务系统进行实际资金划转。
+    core_capabilities:
+      - 交易清分（按规则拆解手续费、分润等）
+      - 轧差计算（净额结算）
+      - 结算指令生成
+      - 结算周期管理（T+0 / T+1 / 自定义）
+      - 清算对账
+    key_aggregates:
+      - "ClearingBatch（清算批次）"
+      - "ClearingDetail（清分明细）"
+      - "SettlementOrder（结算单）"
+
+  # ── 对账域 ──────────────────────────────────────────────
+  - name: "Reconciliation"
+    chinese_name: "对账系统"
+    classification: "supporting"
+    description: >
+      内外部数据的核对与差异处理。确保各系统间、
+      系统与外部渠道间的数据一致性。
+    core_capabilities:
+      - 内部对账（交易 vs 账务 vs 支付）
+      - 外部对账（与银联/网联/三方渠道对账文件核对）
+      - 差异标记与分类（长款/短款/金额不一致）
+      - 差异处理工作流（自动补单/人工处理）
+      - 对账报表
+    key_aggregates:
+      - "ReconciliationTask（对账任务）"
+      - "ReconciliationDifference（差异记录）"
+
+  # ── 风控域 ──────────────────────────────────────────────
+  - name: "RiskControl"
+    chinese_name: "风控系统"
+    classification: "core"
+    description: >
+      实时和准实时的风险评估与决策。在交易、支付、信贷等
+      关键节点提供风险拦截和评分能力。
+    core_capabilities:
+      - 实时风控（交易前/中拦截）
+      - 规则引擎（可配置的风控规则）
+      - 风险评分模型
+      - 黑白名单管理
+      - 风控事件记录与审计
+      - 准实时异步风控（事后分析）
+    key_aggregates:
+      - "RiskAssessment（风险评估）"
+      - "RiskRule（风控规则）"
+      - "RiskEvent（风控事件）"
+
+  # ── 用户中心 ────────────────────────────────────────────
+  - name: "UserCenter"
+    chinese_name: "用户中心"
+    classification: "generic"
+    description: >
+      用户的身份认证、授权与会话管理。是所有系统的统一登录入口，
+      不涉及业务属性。
+    core_capabilities:
+      - 用户注册/登录/登出
+      - 多因素认证（密码/短信/生物识别）
+      - OAuth2 / JWT 令牌管理
+      - 角色与权限管理（RBAC）
+      - 会话管理与安全审计
+    key_aggregates:
+      - "User（用户）"
+      - "Role（角色）"
+      - "Permission（权限）"
+
+  # ── 客户中心 ────────────────────────────────────────────
+  - name: "CustomerCenter"
+    chinese_name: "客户中心"
+    classification: "core"
+    description: >
+      银行客户的全生命周期管理。区别于用户中心（技术身份），
+      客户中心管理的是业务身份（个人客户/企业客户/联名客户）。
+    core_capabilities:
+      - 客户信息管理（个人/企业）
+      - KYC（了解你的客户）流程
+      - 客户画像与标签
+      - 客户关系管理（关联人、担保人）
+      - 客户等级与权益
+    key_aggregates:
+      - "Customer（客户）"
+      - "CustomerProfile（客户画像）"
+      - "KycRecord（KYC 记录）"
+
+  # ── 产品中心 ────────────────────────────────────────────
+  - name: "ProductCenter"
+    chinese_name: "产品中心"
+    classification: "core"
+    description: >
+      金融产品的定义、参数配置与生命周期管理。
+      为信贷、存款、理财等业务提供产品模板和计算规则。
+    core_capabilities:
+      - 产品定义与模板管理
+      - 产品参数配置（利率、费率、期限、还款方式等）
+      - 产品上下架管理
+      - 产品版本控制
+      - 产品适用规则（准入条件）
+    key_aggregates:
+      - "Product（产品）"
+      - "ProductParam（产品参数）"
+      - "ProductRule（产品规则）"
+
+  # ── 额度中心 ────────────────────────────────────────────
+  - name: "CreditLimit"
+    chinese_name: "额度中心"
+    classification: "core"
+    description: >
+      授信额度的全生命周期管控。管理客户的总额度、
+      产品额度、可用额度，支持额度的分配、占用、释放和冻结。
+    core_capabilities:
+      - 额度授予与分配
+      - 额度占用与释放（与交易/信贷联动）
+      - 额度冻结与解冻
+      - 额度层级管理（总额度 → 产品额度 → 子额度）
+      - 额度有效期管理
+      - 共享额度与循环额度
+    key_aggregates:
+      - "CreditLine（授信额度）"
+      - "LimitAllocation（额度分配）"
+      - "LimitOccupation（额度占用）"
+
+  # ── 卡系统 ──────────────────────────────────────────────
+  - name: "CardSystem"
+    chinese_name: "卡系统"
+    classification: "supporting"
+    description: >
+      银行卡的全生命周期管理。包括发卡、绑卡、换卡、
+      挂失、销卡等，以及卡 BIN 管理。
+    core_capabilities:
+      - 发卡（实体卡/虚拟卡）
+      - 卡绑定与解绑
+      - 卡状态管理（正常/挂失/冻结/销卡）
+      - 卡 BIN 管理
+      - 卡与账户的关联关系
+    key_aggregates:
+      - "Card（银行卡）"
+      - "CardBin（卡 BIN）"
+
+  # ── 信贷流程管理 ────────────────────────────────────────
+  - name: "LoanProcess"
+    chinese_name: "信贷流程管理系统"
+    classification: "core"
+    description: >
+      信贷业务的全流程编排引擎。管理从进件、审批、签约、
+      放款到贷后的完整业务流程，是信贷业务的"指挥官"。
+    core_capabilities:
+      - 进件受理与资料采集
+      - 审批流程编排（自动审批 + 人工审批）
+      - 签约管理
+      - 放款流程编排
+      - 贷后管理流程（逾期提醒、催收流转）
+      - 流程状态机与 SLA 监控
+    key_aggregates:
+      - "LoanApplication（贷款申请）"
+      - "ApprovalProcess（审批流程）"
+      - "LoanContract（贷款合同）"
+
+  # ── 信贷核心 ────────────────────────────────────────────
+  - name: "LoanCore"
+    chinese_name: "信贷核心系统"
+    classification: "core"
+    description: >
+      信贷业务的计算引擎和数据核心。负责还款计划生成、
+      利息计算、提前还款、逾期罚息等核心信贷逻辑。
+    core_capabilities:
+      - 还款计划生成（等额本息/等额本金/先息后本/自定义）
+      - 利息计算（按日计息、复利、罚息）
+      - 提前还款处理
+      - 逾期管理与罚息计算
+      - 减免与核销
+      - 借据管理
+    key_aggregates:
+      - "Loan（借据）"
+      - "RepaymentPlan（还款计划）"
+      - "RepaymentSchedule（还款明细）"
+      - "InterestCalculation（利息计算）"

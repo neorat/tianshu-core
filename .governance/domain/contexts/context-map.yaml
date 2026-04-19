@@ -1,0 +1,288 @@
+# 天枢银行核心系统群 — 上下文映射（Context Map）
+# 定义各系统间的交互关系、集成模式和数据流向
+
+context_map:
+  name: "TianshuContextMap"
+  description: "银行核心系统群的上下文间关系与集成模式"
+
+# ═══════════════════════════════════════════════════════════
+# upstream / downstream 语义约定：
+#   本文件采用"模型影响力方向"定义上下游关系——
+#   upstream 是模型的权威方 / 服务提供方，其模型变更会影响 downstream；
+#   downstream 是模型的消费方 / 适配方，需要适配 upstream 的模型。
+#   注意：调用方向可能与上下游方向相反（downstream 调用 upstream 的服务）。
+#
+# 集成模式说明：
+#   ACL (Anti-Corruption Layer)  — 下游用防腐层隔离上游模型
+#   OHS (Open Host Service)      — 上游提供标准化服务接口
+#   CF  (Conformist)             — 下游直接遵从上游模型
+#   PL  (Published Language)     — 双方约定标准化数据格式
+#   SK  (Shared Kernel)          — 共享核心领域模型（谨慎使用）
+#   PT  (Partnership)            — 双方协同演进
+# ═══════════════════════════════════════════════════════════
+
+relationships:
+
+  # ── 交易系统的关系 ──────────────────────────────────────
+
+  - upstream: "Transaction"
+    downstream: "Payment"
+    pattern: "OHS/ACL"
+    description: >
+      交易系统受理交易后，生成支付指令发送给支付系统。
+      支付系统通过 ACL 将交易指令转换为内部支付模型。
+    integration:
+      sync: "Transaction → Payment: 发起支付请求"
+      async: "Payment → Transaction: 支付结果事件（PaymentCompletedEvent）"
+
+  - upstream: "RiskControl"
+    downstream: "Transaction"
+    pattern: "OHS/ACL"
+    description: >
+      交易受理前调用风控系统进行实时风险评估。
+      风控系统是风险评估服务提供方（upstream），交易系统是消费方（downstream）。
+      风控系统返回通过/拒绝/人工审核决策。
+    integration:
+      sync: "Transaction → RiskControl: 风控评估请求（同步，交易前拦截）"
+
+  - upstream: "Transaction"
+    downstream: "Clearing"
+    pattern: "OHS/PL"
+    description: >
+      交易完成后发布交易完成事件，清结算系统订阅并进行清分。
+    integration:
+      async: "Transaction → Clearing: 交易完成事件（TransactionCompletedEvent）"
+
+  - upstream: "Transaction"
+    downstream: "Reconciliation"
+    pattern: "OHS/PL"
+    description: >
+      交易系统提供交易流水数据，对账系统拉取后与账务、支付流水进行三方核对。
+      补全"交易 vs 账务 vs 支付"内部对账的数据来源。
+    integration:
+      async: "Transaction → Reconciliation: 交易流水数据（批量/文件）"
+
+  - upstream: "Accounting"
+    downstream: "Transaction"
+    pattern: "OHS/ACL"
+    description: >
+      特定场景下（交易手续费记账、交易冲正等），交易系统直接驱动账务记账，
+      不经过支付系统。账务系统作为记账服务提供方（upstream），
+      交易系统通过 ACL 适配记账模型。
+    integration:
+      sync: "Transaction → Accounting: 交易手续费/冲正记账请求"
+
+  # ── 支付系统的关系 ──────────────────────────────────────
+
+  - upstream: "Accounting"
+    downstream: "Payment"
+    pattern: "OHS/ACL"
+    description: >
+      支付执行成功后，驱动账务系统进行记账。
+      账务系统是记账服务提供方（upstream），支付系统通过 ACL 将支付信息转换为记账凭证。
+    integration:
+      sync: "Payment → Accounting: 记账请求（同步，确保资金一致性）"
+      async: "Accounting → Payment: 记账完成事件（AccountingCompletedEvent）"
+
+  - upstream: "Payment"
+    downstream: "Reconciliation"
+    pattern: "OHS/PL"
+    description: >
+      支付系统提供支付流水数据，对账系统定期拉取进行核对。
+    integration:
+      async: "Payment → Reconciliation: 支付流水数据（批量/文件）"
+
+  # ── 账务系统的关系 ──────────────────────────────────────
+
+  - upstream: "Accounting"
+    downstream: "Reconciliation"
+    pattern: "OHS/PL"
+    description: >
+      账务系统提供账务流水，对账系统核对账务与交易/支付的一致性。
+    integration:
+      async: "Accounting → Reconciliation: 账务流水数据（批量/文件）"
+
+  # ── 清结算系统的关系 ────────────────────────────────────
+
+  - upstream: "Payment"
+    downstream: "Clearing"
+    pattern: "OHS/ACL"
+    description: >
+      清结算完成轧差后，生成结算指令请求支付系统执行资金划转。
+      支付系统是资金划转的服务提供方（upstream），清结算是消费方（downstream）。
+    integration:
+      sync: "Clearing → Payment: 结算支付请求"
+      async: "Payment → Clearing: 结算支付结果事件"
+
+  - upstream: "Accounting"
+    downstream: "Clearing"
+    pattern: "OHS/ACL"
+    description: >
+      清分结果驱动账务记账（手续费、分润等）。
+      账务系统是记账服务提供方（upstream），清结算通过 ACL 适配记账模型。
+    integration:
+      sync: "Clearing → Accounting: 清算记账请求"
+
+  # ── 风控系统的关系 ──────────────────────────────────────
+
+  - upstream: "CustomerCenter"
+    downstream: "RiskControl"
+    pattern: "OHS/ACL"
+    description: >
+      风控系统获取客户画像和历史行为数据用于风险评估。
+    integration:
+      sync: "RiskControl → CustomerCenter: 查询客户画像"
+
+  - upstream: "CreditLimit"
+    downstream: "RiskControl"
+    pattern: "OHS/ACL"
+    description: >
+      风控系统查询客户额度使用情况作为风险评估因子。
+    integration:
+      sync: "RiskControl → CreditLimit: 查询额度使用率"
+
+  # ── 客户中心的关系 ──────────────────────────────────────
+
+  - upstream: "UserCenter"
+    downstream: "CustomerCenter"
+    pattern: "OHS/ACL"
+    description: >
+      客户中心关联用户中心的用户身份。用户是技术身份，客户是业务身份。
+      一个用户可对应多个客户角色。用户中心提供标准化身份验证服务（OHS），
+      客户中心通过 ACL 隔离用户模型与客户模型的差异。
+    integration:
+      sync: "CustomerCenter → UserCenter: 验证用户身份"
+      async: "UserCenter → CustomerCenter: 用户注册事件（UserRegisteredEvent）"
+
+  # ── 产品中心的关系 ──────────────────────────────────────
+
+  - upstream: "ProductCenter"
+    downstream: "LoanProcess"
+    pattern: "OHS/CF"
+    description: >
+      信贷流程管理系统从产品中心获取产品定义和参数，
+      用于进件校验和流程配置。
+    integration:
+      sync: "LoanProcess → ProductCenter: 查询产品参数"
+
+  - upstream: "ProductCenter"
+    downstream: "LoanCore"
+    pattern: "OHS/CF"
+    description: >
+      信贷核心从产品中心获取利率、还款方式等计算参数。
+    integration:
+      sync: "LoanCore → ProductCenter: 查询产品计算参数"
+
+  - upstream: "ProductCenter"
+    downstream: "CreditLimit"
+    pattern: "OHS/CF"
+    description: >
+      额度中心根据产品定义确定额度规则和层级结构。
+    integration:
+      sync: "CreditLimit → ProductCenter: 查询产品额度规则"
+
+  # ── 额度中心的关系 ──────────────────────────────────────
+
+  - upstream: "CreditLimit"
+    downstream: "LoanProcess"
+    pattern: "OHS/ACL"
+    description: >
+      信贷流程中进行额度校验和预占用，放款时正式占用，还款时释放。
+    integration:
+      sync: "LoanProcess → CreditLimit: 额度预占用/占用/释放"
+      async: "CreditLimit → LoanProcess: 额度变更事件"
+
+  - upstream: "CreditLimit"
+    downstream: "Transaction"
+    pattern: "OHS/ACL"
+    description: >
+      交易受理时检查客户可用额度是否充足。
+    integration:
+      sync: "Transaction → CreditLimit: 额度校验"
+
+  # ── 卡系统的关系 ────────────────────────────────────────
+
+  - upstream: "CardSystem"
+    downstream: "Payment"
+    pattern: "OHS/ACL"
+    description: >
+      支付系统通过卡系统获取卡信息和关联账户，用于支付路由。
+    integration:
+      sync: "Payment → CardSystem: 查询卡信息与关联账户"
+
+  - upstream: "Accounting"
+    downstream: "CardSystem"
+    pattern: "OHS/ACL"
+    description: >
+      卡与账户的绑定关系。发卡时需要在账务系统开立对应账户。
+      账务系统是账户管理的服务提供方（upstream），卡系统是消费方（downstream）。
+    integration:
+      sync: "CardSystem → Accounting: 开户请求"
+
+  - upstream: "CustomerCenter"
+    downstream: "CardSystem"
+    pattern: "OHS/CF"
+    description: >
+      卡系统从客户中心获取持卡人信息。
+    integration:
+      sync: "CardSystem → CustomerCenter: 查询客户信息"
+
+  # ── 信贷流程管理的关系 ──────────────────────────────────
+
+  - upstream: "LoanProcess"
+    downstream: "LoanCore"
+    pattern: "Partnership"
+    description: >
+      信贷流程管理是"指挥官"，信贷核心是"计算引擎"。
+      流程管理编排业务流程，核心系统执行具体信贷计算。
+    integration:
+      sync: "LoanProcess → LoanCore: 生成还款计划/放款/还款"
+      async: "LoanCore → LoanProcess: 还款完成事件/逾期事件"
+
+  - upstream: "RiskControl"
+    downstream: "LoanProcess"
+    pattern: "OHS/ACL"
+    description: >
+      信贷审批环节调用风控系统进行信用评估。
+      风控系统是风险评估服务提供方（upstream），信贷流程是消费方（downstream）。
+    integration:
+      sync: "LoanProcess → RiskControl: 信贷风控评估请求"
+
+  - upstream: "CustomerCenter"
+    downstream: "LoanProcess"
+    pattern: "OHS/ACL"
+    description: >
+      进件时获取客户信息和 KYC 状态。
+      客户中心是客户数据的权威方（upstream），信贷流程是消费方（downstream）。
+    integration:
+      sync: "LoanProcess → CustomerCenter: 查询客户信息与 KYC 状态"
+
+  # ── 信贷核心的关系 ──────────────────────────────────────
+
+  - upstream: "Payment"
+    downstream: "LoanCore"
+    pattern: "OHS/ACL"
+    description: >
+      放款和还款时，信贷核心驱动支付系统执行资金划转。
+      支付系统是资金划转服务提供方（upstream），信贷核心是消费方（downstream）。
+    integration:
+      sync: "LoanCore → Payment: 放款支付请求/还款代扣请求"
+      async: "Payment → LoanCore: 支付结果事件"
+
+  - upstream: "Accounting"
+    downstream: "LoanCore"
+    pattern: "OHS/ACL"
+    description: >
+      信贷核心的放款、还款、计提等操作驱动账务记账。
+      账务系统是记账服务提供方（upstream），信贷核心通过 ACL 适配记账模型。
+    integration:
+      sync: "LoanCore → Accounting: 信贷记账请求"
+
+  - upstream: "CreditLimit"
+    downstream: "LoanCore"
+    pattern: "OHS/ACL"
+    description: >
+      放款时占用额度，还款时释放额度。
+      额度中心是额度管理的权威方（upstream），信贷核心是消费方（downstream）。
+    integration:
+      sync: "LoanCore → CreditLimit: 额度占用/释放"

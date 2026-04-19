@@ -1,0 +1,13 @@
+{
+  "name": "TDD Guard",
+  "version": "1.0.0",
+  "description": "写代码前检查是否遵循 TDD 流程",
+  "when": {
+    "type": "preToolUse",
+    "toolTypes": ["write"]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "检查：你是否在写生产代码？如果是，确认已经有对应的失败测试。如果没有失败的测试，先写测试。如果你正在写测试文件、配置文件或文档，可以继续。"
+  }
+}

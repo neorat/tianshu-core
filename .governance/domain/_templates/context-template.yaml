@@ -1,0 +1,46 @@
+# 有界上下文定义模板
+# 用于定义上下文的边界、职责和与其他上下文的关系。
+#
+# 使用方式：复制此模板到 domain/contexts/{your-context}/ 目录下，
+# 重命名为 context-map.yaml，根据业务实际情况填写。
+
+context:
+  name: "[ContextName]"                 # 上下文名称 (PascalCase)
+  chinese_name: "[中文名]"
+  classification: "core"                # core / supporting / generic
+  description: "[一句话描述上下文的职责边界]"
+
+  # ── 核心聚合 ──────────────────────────────────────────
+  aggregates:
+    - name: "[AggregateRootName]"
+      role: "聚合根"
+      definition: "aggregates/{name}.aggregate.yaml"
+
+  # ── 领域事件（发布） ─────────────────────────────────
+  publishes:
+    - event: "[EntityActionEvent]"
+      trigger: "[触发条件]"
+      payload: "[关键字段]"
+
+  # ── 领域事件（订阅） ─────────────────────────────────
+  subscribes:
+    - event: "[ExternalEvent]"
+      source_context: "[SourceContext]"
+      handler: "[处理逻辑简述]"
+
+  # ── 上下文映射 (Context Map) ──────────────────────────
+  relationships:
+    - target: "[OtherContext]"
+      pattern: "ACL"                    # ACL / OHS / Conformist / Shared Kernel / Partnership
+      direction: "upstream"             # upstream / downstream / bidirectional
+      description: "[关系描述]"
+      integration:
+        sync: "[同步调用的接口]"
+        async: "[异步事件]"
+
+  # ── 对外暴露的服务 ───────────────────────────────────
+  open_host_services:
+    - name: "[ServiceName]"
+      type: "REST"                      # REST / RPC / MQ
+      description: "[服务描述]"
+      contract: "open-host-service.md"  # API 契约文档

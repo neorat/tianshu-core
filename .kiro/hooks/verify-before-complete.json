@@ -1,0 +1,12 @@
+{
+  "name": "Verify Before Completion",
+  "version": "1.0.0",
+  "description": "agent 停止前提醒验证工作是否真正完成",
+  "when": {
+    "type": "agentStop"
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "在声称完成之前，确认你已经运行了验证命令并看到了实际输出。不要使用应该、大概等词。如果没有运行验证，现在运行。"
+  }
+}

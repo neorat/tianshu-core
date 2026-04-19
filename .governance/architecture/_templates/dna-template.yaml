@@ -1,0 +1,66 @@
+# 架构元数据 (DNA) 模板
+# 用于定义机器可读的架构约束，供 AI 精确解析和遵守。
+#
+# 使用方式：复制此模板，根据项目实际情况填写。
+# 常见用途：分层规则、集成约束、异常体系、事件总线规则等。
+#
+# 格式原则：
+# - 纯键值对，无叙述性文字
+# - AI 能以极速加载并应用约束条件
+# - 与 ADR (History) 和 Manual 互补，不重复
+
+# ── 示例：分层架构定义 ──────────────────────────────────
+# 取消注释并根据项目实际情况修改
+
+# name: layering-rules
+# description: 分层架构依赖方向定义
+#
+# layers:
+#   - name: interface
+#     aliases: [controller, api, web]
+#     allowed_dependencies: [application, domain]
+#     forbidden_dependencies: [infrastructure]
+#
+#   - name: application
+#     aliases: [service, usecase]
+#     allowed_dependencies: [domain]
+#     forbidden_dependencies: [infrastructure, interface]
+#
+#   - name: domain
+#     aliases: [model, entity, core]
+#     allowed_dependencies: []
+#     forbidden_dependencies: [application, infrastructure, interface]
+#     note: 领域层零外部依赖
+#
+#   - name: infrastructure
+#     aliases: [persistence, gateway, adapter]
+#     allowed_dependencies: [domain, application]
+#     forbidden_dependencies: [interface]
+#
+# dependency_direction: interface → application → domain ← infrastructure
+# violation_severity: error  # error | warning
+
+# ── 示例：集成规则 ──────────────────────────────────────
+# name: integration-rules
+# description: 外部系统集成约束
+#
+# principles:
+#   - name: 同步边界
+#     rule: 外部 RPC 调用必须设置超时，默认 3000ms
+#   - name: 幂等性
+#     rule: 所有对外暴露的写接口必须支持幂等
+#   - name: 防腐层
+#     rule: 外部系统数据模型不得直接进入领域层，必须经过 ACL 转换
+
+# ── 示例：异常体系 ──────────────────────────────────────
+# name: exception-rules
+# description: 统一异常处理元数据
+#
+# error_code_format: "SSDDNNNN"  # SS=子系统, DD=领域, NNNN=序号
+# exception_hierarchy:
+#   - name: DomainException
+#     scope: 业务规则违反
+#   - name: ApplicationException
+#     scope: 应用层编排异常
+#   - name: InfrastructureException
+#     scope: 基础设施故障

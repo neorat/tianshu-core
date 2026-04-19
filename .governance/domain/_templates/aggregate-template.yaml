@@ -1,0 +1,70 @@
+# 聚合根定义模板
+# 用于定义领域聚合的完整契约，AI 可据此 1:1 还原实体代码。
+#
+# 使用方式：复制此模板到 domain/contexts/{your-context}/aggregates/ 目录下，
+# 重命名为 {aggregate-name}.aggregate.yaml，根据业务实际情况填写。
+
+aggregate:
+  name: "[AggregateRootName]"           # 聚合根类名 (PascalCase)
+  chinese_name: "[中文名]"              # 业务中文名
+  bounded_context: "[ContextName]"      # 所属有界上下文
+  description: "[一句话描述聚合的职责]"
+
+  # ── 标识 ──────────────────────────────────────────────
+  identity:
+    field: "id"
+    type: "Long"                        # 或 String / UUID
+    generation: "auto_increment"        # auto_increment / snowflake / uuid
+
+  # ── 字段定义 ──────────────────────────────────────────
+  fields:
+    - name: "[fieldName]"
+      type: "[String / Integer / BigDecimal / LocalDateTime / Enum]"
+      required: true
+      description: "[字段业务含义]"
+    # - name: "status"
+    #   type: "StatusEnum"
+    #   required: true
+    #   description: "聚合状态"
+
+  # ── 生命周期状态机 ────────────────────────────────────
+  # 使用 Mermaid stateDiagram 语法定义，AI 可直接转译为 Enum + 状态转换方法
+  lifecycle: |
+    stateDiagram-v2
+      [*] --> INIT: 创建
+      INIT --> PROCESSING: 开始处理
+      PROCESSING --> COMPLETED: 处理成功
+      PROCESSING --> FAILED: 处理失败
+      FAILED --> PROCESSING: 重试
+
+  # ── 业务不变量 (Invariants) ───────────────────────────
+  invariants:
+    - id: "INV-01"
+      description: "[不变量描述，如：金额必须大于零]"
+      enforcement: "[在哪个方法中校验]"
+
+  # ── 领域方法 ──────────────────────────────────────────
+  methods:
+    - name: "[methodName]"
+      description: "[方法业务含义]"
+      params: "[参数列表]"
+      returns: "[返回类型]"
+      triggers_event: "[触发的领域事件，如有]"
+      invariants_checked: ["INV-01"]
+
+  # ── 值对象 (Value Objects) ────────────────────────────
+  value_objects:
+    - name: "[ValueObjectName]"
+      fields:
+        - name: "[field]"
+          type: "[type]"
+      immutable: true
+      description: "[值对象业务含义]"
+
+  # ── 关联的仓储接口 ───────────────────────────────────
+  repository:
+    interface: "[AggregateRootName]Repository"
+    methods:
+      - "save(aggregate): void"
+      - "findById(id): Optional<AggregateRoot>"
+      # - "findByXxx(criteria): List<AggregateRoot>"

@@ -1,0 +1,13 @@
+{
+  "name": "Design Gate",
+  "version": "1.0.0",
+  "description": "创建新文件前检查是否有经过审批的设计文档",
+  "when": {
+    "type": "preToolUse",
+    "toolTypes": ["write"]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "检查：你是否在创建新的生产代码文件（非测试、非配置、非文档）？如果是，确认已有经过用户审批的设计文档（spec.md）或实现计划（plan.md）。如果没有设计文档且这是一个新功能，先使用 brainstorming 工作流。如果你正在执行已有计划中的任务、写测试、写配置或写文档，可以继续。"
+  }
+}

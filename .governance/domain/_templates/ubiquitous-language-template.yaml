@@ -1,0 +1,45 @@
+# 统一语言字典模板
+# 确保代码中的命名与业务术语一致，消除团队（含 AI）的语义歧义。
+#
+# 使用方式：按子域创建独立的术语文件，避免跨域术语冲突。
+# 建议目录结构：
+#   domain/ubiquitous-language/
+#   ├── cross-context.yaml      # 全局通用术语
+#   ├── your-context-terms.yaml # 各上下文专属术语
+#   └── technical-base.yaml     # 技术底座术语
+
+# ── 术语定义 ────────────────────────────────────────────
+terms:
+
+  - term: "[中文业务术语]"
+    english: "[EnglishTerm]"
+    code_name: "[codeVariableName]"     # 代码中的变量/类名
+    abbr: "[缩写]"                      # 用于字段名/列名的标准缩写
+    definition: "[精确定义，消除歧义]"
+    context: "[所属上下文]"
+    examples:
+      - "[使用示例]"
+    anti_patterns:
+      - wrong: "[容易混淆的错误用法]"
+        correct: "[正确用法]"
+
+  # ── 示例 ──────────────────────────────────────────────
+  # - term: "动支"
+  #   english: "Drawdown"
+  #   code_name: "drawdown"
+  #   abbr: "dd"
+  #   definition: "借款人在已获授信额度内发起的单笔借款行为"
+  #   context: "DrawdownContext"
+  #   examples:
+  #     - "用户发起一笔动支申请"
+  #   anti_patterns:
+  #     - wrong: "loan（贷款）"
+  #       correct: "drawdown（动支）— 强调从额度中支取的动作语义"
+
+# ── 命名词根表 ──────────────────────────────────────────
+# 用于代码字段名、数据库列名的标准缩写
+abbreviations:
+  # - full: "[全称]"
+  #   abbr: "[缩写]"
+  #   usage: "[用在哪里，如：字段前缀、表名]"
+  #   example: "[示例：dd_application_id]"
