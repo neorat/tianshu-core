@@ -39,7 +39,7 @@
 **作为**支付系统/交易系统/信贷核心，**我想要**提交一笔业务记账指令（如"从 A 账户转 100 到 B 账户，手续费 0.5 归入手续费收入户"），**以便**账务系统自动完成复式记账。
 
 **验收标准：**
-- [ ] 调用方提交业务指令（含源账户、目标账户、金额、业务类型、业务流水号）
+- [ ] 调用方提交业务记账指令（结构见 FR-4），系统校验指令完整性
 - [ ] 系统内部自动拆解为记账凭证 + 多条借贷分录
 - [ ] 每张凭证借方合计 = 贷方合计（借贷平衡）
 - [ ] 账户余额实时更新
@@ -157,31 +157,79 @@
 | available_balance | 可用余额 | balance - frozen_amount |
 | frozen_amount | 冻结金额 | Σ 各冻结明细金额 |
 
-金额类型统一使用 `BigDecimal`，数据库使用 `DECIMAL(18,2)`。
+金额类型统一使用 `BigDecimal`，数据库使用 `DECIMAL(18,4)`。Phase 1 人民币业务精度到分（2 位小数），但数据库预留 4 位小数，为后续多币种扩展（部分币种需要 3-4 位小数精度）和利息计算中间值避免精度丢失。
 
 ### FR-4: 交易驱动记账模型
 
-调用方提交业务指令，账务系统内部拆解为复式分录：
+调用方提交业务指令，账务系统内部拆解为复式分录。
 
-**记账指令（输入）**：
+**接口分层设计**：
+
+账务系统提供两层记账接口，兼顾灵活性与易用性：
+
+| 层次 | 接口 | 调用方职责 | 适用场景 |
+|------|------|-----------|---------|
+| 底层通用接口 | postAccounting(AccountingCommand) | 调用方自行组装完整 entries | 清结算批量记账、复杂多方记账 |
+| 场景化快捷接口 | transfer(TransferCommand) | 只需提供源/目标账户和金额 | 转账 |
+| 场景化快捷接口 | consume(ConsumeCommand) | 只需提供账户、金额、商户 | 卡消费/退款 |
+
+- 场景化接口内部调用底层通用接口，由账务系统根据 bizType 自动补全手续费分录、过渡户分录等
+- Phase 1 先实现底层通用接口 + transfer 快捷接口，其他场景化接口按需扩展
+- Phase 2 可引入记账模板引擎，通过配置化方式支持更多场景
+
+**底层通用记账指令（输入）**：
 ```
 {
   "bizNo": "PAY202604210001",        // 业务流水号（幂等键）
   "bizType": "TRANSFER",             // 业务类型
+  "accountingDate": "2026-04-21",    // 会计日（为空则取当前会计日）
+  "currency": "CNY",                 // 币种（ISO 4217，Phase 1 仅支持 CNY）
+  "channelCode": "PAYMENT",          // 渠道来源（标识调用方系统）
+  "operatorId": "SYS_PAYMENT",       // 操作员/发起方标识
+  "memo": "转账 A→B + 手续费",        // 业务备注（可选）
   "entries": [
-    { "accountNo": "A001", "amount": 100.00, "direction": "OUT" },
-    { "accountNo": "B001", "amount": 100.00, "direction": "IN" },
-    { "accountNo": "A001", "amount": 0.50, "direction": "OUT" },
-    { "accountNo": "FEE001", "amount": 0.50, "direction": "IN" }
+    { "accountNo": "A001", "amount": 100.00, "direction": "OUT", "summary": "转账出款" },
+    { "accountNo": "B001", "amount": 100.00, "direction": "IN",  "summary": "转账入款" },
+    { "accountNo": "A001", "amount": 0.50,   "direction": "OUT", "summary": "手续费扣收" },
+    { "accountNo": "FEE001", "amount": 0.50, "direction": "IN",  "summary": "手续费收入" }
   ]
 }
 ```
 
+**指令字段说明**：
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| bizNo | 是 | 业务流水号，作为幂等键，全局唯一 |
+| bizType | 是 | 业务类型（TRANSFER / FEE / INTEREST / CLEARING 等） |
+| accountingDate | 否 | 会计日，为空则取当前 OPEN 状态的会计日 |
+| currency | 是 | 币种，Phase 1 仅支持 CNY |
+| channelCode | 是 | 渠道来源，标识调用方系统 |
+| operatorId | 是 | 操作员或发起方系统标识，用于审计追溯 |
+| memo | 否 | 业务备注 |
+| entries | 是 | 记账分录列表，至少 2 条 |
+| entries[].accountNo | 是 | 账户业务账号 |
+| entries[].amount | 是 | 金额，必须大于 0 |
+| entries[].direction | 是 | 资金方向：OUT（出账）/ IN（入账） |
+| entries[].summary | 否 | 分录摘要 |
+
 **内部拆解为复式分录**：
 - 系统根据账户科目的 normal_balance_direction 自动确定借贷方向
-- 资产类/费用类账户：增加记借方，减少记贷方
-- 负债类/收入类账户：增加记贷方，减少记借方
+- 资产类（ASSET）/费用类（EXPENSE）账户：增加记借方，减少记贷方
+- 负债类（LIABILITY）/收入类（REVENUE）/所有者权益类（EQUITY）账户：增加记贷方，减少记借方
+- 共同类（COMMON）账户：无固定方向，按实际业务的资金流向确定借贷方向（如清算资金往来、货币兑换）
 - 生成记账凭证，校验借贷平衡
+
+**科目类型完整分类**：
+
+| 科目类型 | 英文标识 | normal_balance_direction | 典型科目 |
+|---------|---------|------------------------|---------|
+| 资产类 | ASSET | DEBIT | 存放央行款项、发放贷款 |
+| 负债类 | LIABILITY | CREDIT | 客户存款、同业存放 |
+| 共同类 | COMMON | 按余额方向确定 | 清算资金往来、货币兑换 |
+| 所有者权益类 | EQUITY | CREDIT | 实收资本、盈余公积 |
+| 收入类 | REVENUE | CREDIT | 利息收入、手续费收入 |
+| 费用类 | EXPENSE | DEBIT | 利息支出、业务费用 |
 
 ### FR-5: 科目引用
 
@@ -225,9 +273,9 @@ NORMAL / DORMANT
 ```
 
 状态变更规则：
-- STOP_PAYMENT：禁止出账，允许入账
-- PARTIAL_FREEZE：冻结指定金额，可用余额减少
-- FULL_FREEZE：禁止出账，通常允许入账
+- STOP_PAYMENT：禁止出账，允许入账（银行内部风控/运营触发，不冻结金额，仅限制交易方向）
+- PARTIAL_FREEZE：冻结指定金额，可用余额减少，出入账均允许但出账受可用余额限制
+- FULL_FREEZE：禁止出账，禁止入账（司法冻结/严重风险场景，冻结全部金额，账户完全不可交易）
 - DORMANT：需激活后才能交易
 - CLOSED：终态，不可恢复，销户前必须校验余额=0、冻结=0、无未完成交易
 
@@ -273,9 +321,10 @@ NORMAL / DORMANT
 
 参考 `#[[file:.governance/references/business/计息职责归属决策.md]]` 和 `#[[file:.governance/references/business/存款计息跨域数据依赖决策.md]]`：
 
-- 当前放在账务域内，作为独立的领域服务（DepositInterestService）
+- 当前放在账务域内，作为独立聚合（DepositInterest），拥有独立的聚合根和持久化
+- 存款计息通过 Account 聚合的应用服务接口（AccountRepository / AccountQueryService）获取账户和余额数据，禁止通过 SQL join 直接穿透访问 Account 聚合的表
 - 代码边界清晰，后续可独立为 deposit-core
-- Phase 1 同库同模块，通过 SQL join 获取账户和余额数据
+- Phase 1 同库不同表，通过应用层接口交互，确保聚合边界完整
 - 不与贷款计息混用同一个引擎
 
 ## 聚合设计
@@ -412,9 +461,9 @@ NORMAL / DORMANT
 
 | 决策点 | 当前方案 | 演进方向 |
 |--------|---------|---------|
-| 存款计息 | 放在账务域内，独立 DepositInterestService | 后续可能独立为 deposit-core |
+| 存款计息 | 放在账务域内，独立聚合，通过应用层接口获取账户数据 | 后续可能独立为 deposit-core |
 | 科目体系 | 账务系统内置科目表，接口按外部化设计 | Phase 2 迁移到参数中心 |
-| 批量计息数据 | 同库 SQL join | Phase 2 CDC 同步 + 独立库 |
+| 批量计息数据 | 同库，通过应用层接口查询 | Phase 2 CDC 同步 + 独立库 |
 | 账户状态 | lifecycle + restriction + activity 三维度 | Phase 2 补充 compliance_status |
 | 批量记账 | 异步 MQ | 按需优化吞吐 |
 
