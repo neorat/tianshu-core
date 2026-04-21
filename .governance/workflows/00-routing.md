@@ -34,9 +34,14 @@
 ├─ 👀 "要请人审查代码"
 │   └─→ requesting-code-review（请求代码审查）
 │
-└─ 📝 "收到了审查反馈"
-    └─→ receiving-code-review（接收审查反馈）
-        原则: 验证后再实施，技术正确性 > 社交舒适
+├─ 📝 "收到了审查反馈"
+│   └─→ receiving-code-review（接收审查反馈）
+│       原则: 验证后再实施，技术正确性 > 社交舒适
+│
+└─ 📚 "我有外部资料要整理"
+    └─→ importing-references（导入参考资料）
+        输入: AI 对话、技术文章、文档链接
+        产出: .governance/references/ 下的结构化文档
 ```
 
 ## 完整生命周期
@@ -73,6 +78,7 @@
 | 按需引用 | subagent-driven-development | 子代理开发时 `#subagent-dev` |
 | 按需引用 | requesting-code-review | 请求审查时 `#code-review` |
 | 按需引用 | receiving-code-review | 收到反馈时 `#receiving-review` |
+| 按需引用 | importing-references | 整理外部资料时 `#importing-references` |
 
 ## 常见场景速查
 
