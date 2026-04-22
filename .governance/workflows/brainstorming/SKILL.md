@@ -28,7 +28,7 @@ You MUST create a task for each of these items and complete them in order:
 5. **Propose 2-3 approaches** — with trade-offs and your recommendation
 6. **Present design** — in sections scaled to their complexity, get user approval after each section
 7. **Write design doc** — save to `.governance/specs/NNN-<feature-name>/spec.md` and commit
-8. **Spec self-review** — quick inline check for placeholders, contradictions, ambiguity, scope (see below)
+8. **Spec review (subagent)** — dispatch spec-document-reviewer subagent to verify completeness, consistency, clarity, scope, and YAGNI (see below)
 9. **User reviews written spec** — ask user to review the spec file before proceeding
 10. **Transition to implementation** — invoke writing-plans skill to create implementation plan
 
@@ -45,7 +45,7 @@ digraph brainstorming {
     "Present design sections" [shape=box];
     "User approves design?" [shape=diamond];
     "Write design doc" [shape=box];
-    "Spec self-review\n(fix inline)" [shape=box];
+    "Spec review\n(subagent)" [shape=box];
     "User reviews spec?" [shape=diamond];
     "Invoke writing-plans skill" [shape=doublecircle];
 
@@ -59,8 +59,8 @@ digraph brainstorming {
     "Present design sections" -> "User approves design?";
     "User approves design?" -> "Present design sections" [label="no, revise"];
     "User approves design?" -> "Write design doc" [label="yes"];
-    "Write design doc" -> "Spec self-review\n(fix inline)";
-    "Spec self-review\n(fix inline)" -> "User reviews spec?";
+    "Write design doc" -> "Spec review\n(subagent)";
+    "Spec review\n(subagent)" -> "User reviews spec?";
     "User reviews spec?" -> "Write design doc" [label="changes requested"];
     "User reviews spec?" -> "Invoke writing-plans skill" [label="approved"];
 }
@@ -121,15 +121,13 @@ digraph brainstorming {
   - (User preferences for spec location override this default)
 - Commit the design document to git
 
-**Spec Self-Review:**
-After writing the spec document, look at it with fresh eyes:
+**Spec Review (Subagent):**
+After writing the spec document, dispatch a spec-document-reviewer subagent for independent review. Use the prompt template in `spec-document-reviewer-prompt.md` (in this directory).
 
-1. **Placeholder scan:** Any "TBD", "TODO", incomplete sections, or vague requirements? Fix them.
-2. **Internal consistency:** Do any sections contradict each other? Does the architecture match the feature descriptions?
-3. **Scope check:** Is this focused enough for a single implementation plan, or does it need decomposition?
-4. **Ambiguity check:** Could any requirement be interpreted two different ways? If so, pick one and make it explicit.
+- If the reviewer returns **Approved**: proceed to user review gate.
+- If the reviewer returns **Issues Found**: fix the issues inline, then re-dispatch the reviewer to confirm the fixes. Repeat until approved.
 
-Fix any issues inline. No need to re-review — just fix and move on.
+Why a subagent instead of self-review: the same context that wrote the spec has blind spots. A fresh subagent with no prior context catches gaps that the author misses.
 
 **User Review Gate:**
 After the spec review loop passes, ask the user to review the written spec before proceeding:

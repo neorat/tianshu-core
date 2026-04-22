@@ -287,6 +287,7 @@ NORMAL / DORMANT
 |------|------|
 | freeze_id | 冻结明细 ID |
 | account_id | 账户 ID |
+| currency | 币种（ISO 4217，Phase 1 仅 CNY） |
 | freeze_amount | 冻结金额 |
 | freeze_type | 冻结类型（JUDICIAL / RISK / PLEDGE） |
 | freeze_reason | 冻结原因 |
@@ -312,16 +313,16 @@ NORMAL / DORMANT
 ### FR-11: 日终处理
 
 - **日切**：切换会计日，维护 AccountingDay 聚合
-- **余额快照**：记录每个账户的日终余额（balance、available_balance、frozen_amount）
+- **余额快照**：记录每个账户的日终余额（account_id、currency、balance、available_balance、frozen_amount）
 - **发生额汇总**：汇总每个账户的日间借方发生额和贷方发生额
 - 日切状态：OPEN → CUTTING → CLOSED
 - 日切后的交易归入下一个会计日
 
-### FR-12: 存款计息（预留边界）
+### FR-12: 存款计息（独立聚合）
 
 参考 `#[[file:.governance/references/business/计息职责归属决策.md]]` 和 `#[[file:.governance/references/business/存款计息跨域数据依赖决策.md]]`：
 
-- 当前放在账务域内，作为独立聚合（DepositInterest），拥有独立的聚合根和持久化
+- Phase 1 实现存款计息功能，放在账务域内，作为独立聚合（DepositInterest），拥有独立的聚合根和持久化
 - 存款计息通过 Account 聚合的应用服务接口（AccountRepository / AccountQueryService）获取账户和余额数据，禁止通过 SQL join 直接穿透访问 Account 聚合的表
 - 代码边界清晰，后续可独立为 deposit-core
 - Phase 1 同库不同表，通过应用层接口交互，确保聚合边界完整
@@ -373,7 +374,7 @@ NORMAL / DORMANT
 - 实体：AccountingEntry（记账分录，聚合内实体）
 
 **AccountingEntry 字段**：
-- entry_id、voucher_id、account_id、account_no、subject_code、direction（DEBIT / CREDIT）、amount、balance_before、balance_after、summary
+- entry_id、voucher_id、account_id、account_no、subject_code、currency、direction（DEBIT / CREDIT）、amount、balance_before、balance_after、summary
 
 **不变量**：
 - INV-05：每张凭证 Σ 借方金额 = Σ 贷方金额（借贷平衡）
@@ -408,6 +409,35 @@ NORMAL / DORMANT
 
 **领域事件**：
 - DayCutOffCompletedEvent
+
+### 聚合四：DepositInterest（存款计息）
+
+**职责**：存款利息计算、计息规则管理、利息结转
+
+**聚合根**：DepositInterest
+- 标识：interest_id（Snowflake）
+- 核心字段：account_id、currency、interest_rate、rate_type（FIXED / TIERED）、accrual_basis（ACT_360 / ACT_365）、last_accrual_date、accrued_amount、status（ACTIVE / SUSPENDED / SETTLED）
+
+**不变量**：
+- INV-10：accrued_amount ≥ 0
+- INV-11：interest_rate > 0
+- INV-12：last_accrual_date ≤ 当前会计日
+
+**领域方法**：
+- activate(accountId, rate, rateType, accrualBasis)：激活计息
+- accrue(accountingDate, balance)：按日计提利息（通过 AccountQueryService 获取余额，禁止直接访问 Account 表）
+- settle()：利息结转（生成记账指令提交给 AccountingVoucher）
+- suspend()：暂停计息
+- adjustRate(newRate)：调整利率
+
+**领域事件**：
+- InterestAccruedEvent
+- InterestSettledEvent
+
+**跨聚合交互**：
+- 读取余额：通过 AccountQueryService 应用层接口
+- 利息入账：通过 AccountingApiClient 提交记账指令
+- 禁止 SQL join 穿透 Account 聚合的表
 
 ## 对外接口
 
