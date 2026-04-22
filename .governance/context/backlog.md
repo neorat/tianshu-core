@@ -9,10 +9,12 @@
 ## 进行中
 
 - [x] 评审系统群全景设计，确认职责边界和交互关系是否合理
+- [ ] 账务系统 spec 文档完善（brainstorming，进度见 current-focus.md）
 
 ## 待开始
 
-- [ ] 选定第一个落地系统，完成详细聚合建模（aggregate YAML）
+- [ ] 账务系统 spec 已确认决策写入 spec.md + 自审 + 用户终审
+- [ ] 完成详细聚合建模（aggregate YAML）
 - [ ] 为第一个系统创建统一语言字典
 - [ ] 搭建第一个系统的 Maven 多模块工程骨架
 - [ ] 编写 ArchUnit 分层约束测试
