@@ -3,7 +3,7 @@
 ## 一、设计目标
 
 1. 各层异常职责清晰，不跨层抛出技术细节
-2. 统一响应结构，HTTP / RPC 出口格式一致（均使用 `ApiResponse<T>`）
+2. 统一响应结构，HTTP / RPC / MQ 出口格式一致（均使用 `ApiResponse<T>`）
 3. 错误码可追溯，支持按系统、领域上下文、层级快速定位
 4. 错误信息支持 `{}` 占位符，运行时填充
 5. 异常通过静态工厂方法 `XxxException.of(...)` 创建，禁止直接 `new`
@@ -38,28 +38,27 @@ throw new DomainException(errorCode, null, null);
 
 ## 三、错误码体系
 
-### 编码格式：8 位纯数字 `SS DD NNNN`
+### 编码格式：10 位纯数字 `BB AA SS NNNN`
 
 ```
-SS   — 2位系统编码（每个系统固定，如 01）
-DD   — 2位领域上下文编码
-NNNN — 4位错误序号，首位标识层级：
-       1XXX — Domain 层
-       2XXX — Application 层
-       3XXX — Infrastructure 层
-       9XXX — System/Framework 层
+BB   — 2位业务线编码（由 BusinessLineCode 定义）
+AA   — 2位应用编码（由 ApplicationCode 定义，各业务工程自行扩展）
+SS   — 2位分层编码：
+       10 — Domain 层
+       20 — Application 层
+       30 — Infrastructure 层
+       90 — System/Framework 层
+NNNN — 4位错误序号
 ```
 
-### ErrorCode 接口
+### ErrorCode 密封接口（由 engineering-core 提供）
 
 ```java
-public interface ErrorCode {
+public sealed interface ErrorCode
+        permits DomainErrorCode, ApplicationErrorCode, InfrastructureErrorCode, SystemErrorCode {
     String getCode();
     String getMessageTemplate();
-
-    default String resolveMessage(Object... args) {
-        // 自实现 {} 占位符替换
-    }
+    default String resolveMessage(Object... args) { /* {} 占位符替换 */ }
 }
 ```
 
@@ -67,10 +66,10 @@ public interface ErrorCode {
 
 | 枚举 | 位置 | 编码段 |
 |------|------|--------|
-| `SystemErrorCode` | domain/shared/exception/ | `SS 00 9XXX` |
-| `InfraErrorCode` | infrastructure/ | `SS 00 3XXX` |
-| `{Context}DomainErrorCode` | domain/{context}/exception/ | `SS DD 1XXX` |
-| `{Context}AppErrorCode` | application/{context}/exception/ | `SS DD 2XXX` |
+| `SystemErrorCode` | engineering-core | `BB AA 90 NNNN` |
+| `{Context}DomainErrorCode` | domain/{context}/exception/ | `BB AA 10 NNNN` |
+| `{Context}AppErrorCode` | application/{context}/ | `BB AA 20 NNNN` |
+| `{Context}InfraErrorCode` | infrastructure/ | `BB AA 30 NNNN` |
 
 ---
 
@@ -87,45 +86,83 @@ public interface ErrorCode {
 
 ---
 
-## 五、全局异常处理
+## 五、全局异常处理（UnifiedExceptionHandler + ExceptionMapper）
 
-### ExceptionHandlerSupport（抽象基类）
+### 架构设计
 
-三种协议适配器共享同一套转换逻辑：
+三种协议适配器共享同一套异常处理逻辑，由 engineering-core 提供：
+
+```
+UnifiedExceptionHandler（协议无关入口）
+    └── ExceptionMapper（策略分发器）
+        ├── BusinessExceptionMappingStrategy（order=10）
+        │   ├── DomainException      → WARN + 返回业务错误码
+        │   ├── ApplicationException → WARN + 返回业务错误码
+        │   └── InfrastructureException → ERROR + 返回"系统繁忙"
+        ├── [自定义策略]（业务工程注册）
+        └── DefaultExceptionMappingStrategy（order=MAX，兜底）
+            └── 所有未匹配异常 → ERROR + 返回"系统内部错误"
+```
+
+### UnifiedExceptionHandler
 
 ```java
-public abstract class ExceptionHandlerSupport {
-    protected ApiResponse<Void> resolveException(Throwable ex, String channel, String operation) {
-        if (ex instanceof DomainException e) {
-            log.warn("[{}][{}] DomainException code={}, message={}",
-                    channel, operation, e.getErrorCode().getCode(), e.getResolvedMessage());
-            return ApiResponse.error(e.getErrorCode().getCode(), e.getResolvedMessage());
-        }
-        if (ex instanceof ApplicationException e) {
-            log.warn("[{}][{}] ApplicationException useCase={}, code={}",
-                    channel, operation, e.getUseCase(), e.getErrorCode().getCode());
-            return ApiResponse.error(e.getErrorCode().getCode(), e.getResolvedMessage());
-        }
-        if (ex instanceof InfrastructureException e) {
-            log.error("[{}][{}] InfrastructureException component={}",
-                    channel, operation, e.getComponent(), e);
-            return ApiResponse.error(SystemErrorCode.SYSTEM_ERROR.getCode(), "系统繁忙，请稍后重试");
-        }
-        log.error("[{}][{}] UnexpectedException", channel, operation, ex);
-        return ApiResponse.error(SystemErrorCode.SYSTEM_ERROR.getCode(), "系统内部错误");
+public class UnifiedExceptionHandler {
+    private final ExceptionMapper exceptionMapper;
+
+    public ApiResponse<Void> resolveException(Throwable ex, String channel, String operation) {
+        var context = new ErrorContext(channel, operation);
+        return exceptionMapper.resolve(ex, context);
     }
 }
 ```
 
-### MQ 适配：按异常类型决定重试
+### ExceptionMapper 策略注册
 
 ```java
-// 业务异常（Domain/Application）不重试，避免死循环
-// 技术异常（Infrastructure/未知）可重试
-public boolean handleAndShouldRetry(Throwable ex, String topic, String msgId) {
-    resolveException(ex, "MQ", topic + "#" + msgId);
-    return !(ex instanceof DomainException) && !(ex instanceof ApplicationException);
+public class ExceptionMapper {
+    public ExceptionMapper() {
+        register(new BusinessExceptionMappingStrategy());  // order=10
+        register(new DefaultExceptionMappingStrategy());   // order=MAX
+    }
+
+    public void register(ExceptionMappingStrategy strategy) { /* 按 order 排序 */ }
+    public ApiResponse<Void> resolve(Throwable ex, ErrorContext context) { /* 按序匹配 */ }
 }
+```
+
+### 自定义策略扩展
+
+业务工程可注册自定义策略处理特定异常（如 JSR-303 校验异常、Spring Security 异常）：
+
+```java
+public class ValidationExceptionStrategy implements ExceptionMappingStrategy {
+    @Override public boolean supports(Throwable ex) {
+        return ex instanceof MethodArgumentNotValidException;
+    }
+    @Override public ApiResponse<Void> map(Throwable ex, ErrorContext context) { /* ... */ }
+    @Override public int order() { return 20; }  // 优先级介于业务异常和兜底之间
+}
+
+// 注册
+unifiedExceptionHandler.getExceptionMapper().register(new ValidationExceptionStrategy());
+```
+
+### 各协议适配器使用方式
+
+```java
+// HTTP — @RestControllerAdvice
+@ExceptionHandler(Exception.class)
+public ApiResponse<Void> handleAll(Exception ex, HttpServletRequest request) {
+    return unifiedExceptionHandler.resolveException(ex, "HTTP", request.getRequestURI());
+}
+
+// Dubbo — Provider Filter
+ApiResponse<Void> resp = unifiedExceptionHandler.resolveException(ex, "Dubbo", interfaceName + "#" + methodName);
+
+// MQ — 消费异常处理
+ApiResponse<Void> resp = unifiedExceptionHandler.resolveException(ex, "MQ", topic + "#" + msgId);
+boolean shouldRetry = !(ex instanceof DomainException) && !(ex instanceof ApplicationException);
 ```
 
 ---

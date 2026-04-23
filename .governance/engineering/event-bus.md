@@ -2,22 +2,67 @@
 
 ## 一、核心模型
 
-### 领域事件基类
+### 领域事件基类（由 engineering-core 提供）
+
+| 类型 | 位置 | 职责 |
+|------|------|------|
+| `DomainEvent` | `core.event` | 抽象基类，携带事件元数据，零框架依赖 |
+| `DomainEventPublisher` | `core.event` | 发布端口接口，Core 层定义，Infrastructure 层实现 |
+| `DomainEventSubscriber<E>` | `core.event` | 订阅端口接口，含幂等校验钩子 |
 
 ```java
-// Java 21 推荐：sealed interface + record
-public sealed interface OrderEvent {
-    record OrderPlaced(String orderId, BigDecimal amount, Instant occurredAt) implements OrderEvent {}
-    record OrderCancelled(String orderId, String reason, Instant occurredAt) implements OrderEvent {}
+@Getter
+public abstract class DomainEvent implements Serializable {
+    private String eventId;          // UUID
+    private String eventType;        // 子类 SimpleName
+    private String sourceContext;    // 来源上下文（ORDER / PAYMENT 等）
+    private String aggregateId;      // 聚合根 ID
+    private String aggregateType;    // 聚合根类型名
+    private LocalDateTime occurredAt;
+
+    protected DomainEvent(String sourceContext, String aggregateId, String aggregateType) {
+        this.eventId = UUID.randomUUID().toString().replace("-", "");
+        this.eventType = this.getClass().getSimpleName();
+        this.sourceContext = sourceContext;
+        this.aggregateId = aggregateId;
+        this.aggregateType = aggregateType;
+        this.occurredAt = LocalDateTime.now();
+    }
+}
+```
+
+### 子类定义示例
+
+子类在各上下文 `domain.event` 包下定义，携带各自业务字段：
+
+```java
+// Java 21 推荐：继承 DomainEvent
+public class OrderPlacedEvent extends DomainEvent {
+    private final BigDecimal amount;
+    private final String customerId;
+
+    public OrderPlacedEvent(String orderId, BigDecimal amount, String customerId) {
+        super("ORDER", orderId, "Order");
+        this.amount = amount;
+        this.customerId = customerId;
+    }
+}
+```
+
+### 发布与订阅接口
+
+```java
+// 发布端口 — Infrastructure 层实现
+public interface DomainEventPublisher {
+    void publish(DomainEvent event);
+    void publishAll(List<DomainEvent> events);
 }
 
-// Java 8 兼容：abstract class
-public abstract class DomainEvent implements Serializable {
-    private final String eventId;         // UUID
-    private final String eventType;       // 子类类名
-    private final String sourceContext;   // 来源上下文
-    private final String aggregateId;     // 关联业务单号
-    private final LocalDateTime occurredAt;
+// 订阅端口 — 各上下文 Infrastructure 层实现
+public interface DomainEventSubscriber<E extends DomainEvent> {
+    void onEvent(E event);
+    Class<E> subscribedToEventType();
+    default boolean isConsumed(E event) { return false; }  // 幂等钩子
 }
 ```
 
@@ -69,6 +114,7 @@ void on(OrderPlacedEvent event) { ... }
 
 - **[强规则]** 消费者必须通过状态机检查或唯一约束保证逻辑幂等
 - 不依赖"只消费一次"的假设
+- `DomainEventSubscriber.isConsumed()` 提供幂等校验钩子
 
 ### 性能
 
@@ -76,7 +122,7 @@ void on(OrderPlacedEvent event) { ... }
 
 ### 零框架依赖
 
-- `DomainEvent` 所在包（Domain 层）严禁引入 Spring / RocketMQ 等第三方依赖
+- `DomainEvent` 所在包（Core 层）严禁引入 Spring / RocketMQ 等第三方依赖
 - MQ 发送逻辑在 Infrastructure 层实现
 
 ---
