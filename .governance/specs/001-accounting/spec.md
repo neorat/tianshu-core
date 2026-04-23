@@ -4,7 +4,7 @@
 
 ## 概述
 
-账务系统是天枢银行核心系统群的基石，为支付、交易、清结算、信贷核心、卡系统等上层系统提供统一的记账和账户管理能力。系统基于复式记账法，对外提供交易驱动的记账接口（调用方提交业务指令，系统内部自动拆解为借贷分录），管理客户户、内部户和虚拟子账户的全生命周期。
+账务系统是天枢银行核心系统群的基石，为支付、交易、清结算、信贷核心、卡系统等上层系统提供统一的记账和账户管理能力。系统基于复式记账法，对外提供交易驱动的记账接口（调用方提交业务指令，系统内部自动拆解为借贷分录），管理客户户、内部户和资金隔离型子账户的全生命周期。
 
 ## 系统定位
 
@@ -45,7 +45,7 @@
 - [ ] 系统内部自动拆解为记账凭证 + 多条借贷分录
 - [ ] 每张凭证借方合计 = 贷方合计（借贷平衡）
 - [ ] 账户余额实时更新
-- [ ] 相同业务流水号重复提交返回已处理结果（幂等）
+- [ ] 相同业务流水号 + 渠道来源（bizNo + channelCode）重复提交返回已处理结果（幂等）
 - [ ] 发布 AccountingCompletedEvent 领域事件
 
 ### US-4: 全额冲正
@@ -65,10 +65,12 @@
 
 **验收标准：**
 - [ ] 支持冻结指定金额，冻结后可用余额 = 当前余额 - 冻结金额
+- [ ] 冻结成功后返回系统生成的 freeze_no（冻结业务编号），调用方持此编号进行后续解冻操作
 - [ ] 冻结类型包括：JUDICIAL（司法）/ RISK（风控）/ PLEDGE（质押）/ PRE_AUTH（预授权）
 - [ ] 同一账户可叠加多笔冻结（不同冻结源）
-- [ ] 解冻时按冻结明细逐笔解冻
-- [ ] 预授权完成时支持 debitWithUnfreeze 原子操作（解冻 + 扣款）
+- [ ] 解冻时必须传入 freeze_no，精确匹配对应的冻结明细逐笔解冻
+- [ ] 冻结操作幂等：相同 biz_freeze_no + freeze_source 重复提交返回已处理的 freeze_no
+- [ ] 预授权完成时支持 debitWithUnfreeze 原子操作（按 freeze_no 解冻 + 扣款）
 - [ ] 司法冻结时同步设置 debit_blocked + credit_blocked 标志位
 - [ ] 发布 AccountFrozenEvent / AccountUnfrozenEvent
 
@@ -86,16 +88,16 @@
 - [ ] 销户前校验：余额=0、冻结金额=0、标志位均为 false、无未完成交易、未结利息=0
 - [ ] 所有状态和标志位变更记录审计日志（AccountStatusAuditLog）
 
-### US-7: 虚拟子账户管理
+### US-7: 子账户管理
 
-**作为**业务系统，**我想要**在主账户下创建虚拟子账户，**以便**实现资金隔离或记账隔离。
+**作为**业务系统，**我想要**在主账户下创建资金隔离型子账户，**以便**实现资金隔离。
 
 **验收标准：**
-- [ ] 资金隔离型子账户：独立余额，主账户余额 = Σ 子账户余额
-- [ ] 记账隔离型子账户：虚拟余额，资金实际在主账户
-- [ ] 子账户有独立的 account_id 和 virtual_no
-- [ ] 资金隔离型子账户可独立记账
-- [ ] 记账隔离型子账户只更新虚拟余额，实际记账在主账户
+- [ ] 子账户有独立的 account_id 和 account_no，通过 parent_account_id 关联主账户
+- [ ] 子账户独立余额，主账户余额 = Σ 子账户余额（INV-03）
+- [ ] 子账户可独立记账，每次 debit/credit 同事务内同步更新主账户 balance
+- [ ] 有 SUB_REAL 子账户时，主账户自身不可直接记账，所有资金操作必须通过子账户进行
+- [ ] 子账户支持完整的冻结/解冻、状态管理、计息等能力，与 MAIN 账户行为一致
 
 ### US-8: 日终处理
 
@@ -149,7 +151,6 @@
 | 客户户（MAIN） | 客户资金归属主体，关联客户号 | CUSTOMER |
 | 内部户（INTERNAL） | 银行内部管理账户，关联法人实体 | INSTITUTION |
 | 资金隔离型子账户（SUB_REAL） | 挂在主账户下，独立余额 | CUSTOMER |
-| 记账隔离型子账户（VIRTUAL） | 挂在主账户下，虚拟余额 | CUSTOMER |
 
 ### FR-2: 账户标识体系
 
@@ -159,8 +160,8 @@
 |------|------|---------|---------|
 | account_id | 系统内部唯一主键 | Snowflake | 不可变 |
 | account_no | 业务账号（对内对外） | 法人代码+产品代码+顺序号+校验位 | 尽量不变 |
-| virtual_no | 虚拟子账户号码 | 独立编号体系 | 尽量不变 |
 
+- 子账户（SUB_REAL）使用独立的 account_id 和 account_no，与主账户通过 parent_account_id 关联
 - 内部服务间调用使用 accountId
 - 对外接口使用 accountNo
 - 外部映射（卡号→账号等）由各外部系统自行维护，不在账务系统管理
@@ -218,7 +219,7 @@
 
 | 字段 | 必填 | 说明 |
 |------|------|------|
-| bizNo | 是 | 业务流水号，作为幂等键，全局唯一 |
+| bizNo | 是 | 业务流水号，与 channelCode 组成复合幂等键，在同一 channelCode 内由调用方保证唯一 |
 | bizType | 是 | 业务类型（TRANSFER / FEE / INTEREST / CLEARING 等） |
 | accountingDate | 否 | 会计日，为空则取当前 OPEN 状态的会计日 |
 | currency | 是 | 币种，Phase 1 仅支持 CNY |
@@ -257,7 +258,7 @@
 
 ### FR-5: 科目引用
 
-科目体系外部化，参考 `#[[file:.governance/references/business/账务系统科目体系设计决策.md]]`：
+科目体系外部化，参考 `#[[file:.governance/references/business/账务系统科目体系设计决策.md]]`，科目种子数据参考 `#[[file:.governance/references/business/银行会计科目权威枚举.md]]`：
 
 - 科目主数据由参数中心/产品中心维护
 - 账务系统本地保留科目快照/缓存：subject_code、subject_name、normal_balance_direction、subject_type
@@ -266,9 +267,14 @@
 
 ### FR-6: 幂等控制
 
-- 以业务流水号（bizNo）作为幂等键
-- 相同 bizNo 重复提交，返回已处理的凭证结果
+- 幂等键为复合键：`bizNo + channelCode`（业务流水号 + 渠道来源）
+  - 不同调用方系统可能各自独立编号，bizNo 单独无法保证全局唯一，channelCode 用于隔离不同调用方的编号空间
+  - 同一调用方内，bizNo 由调用方保证唯一
+- 同一 channelCode 下，同一 bizNo 不论 bizType 是否相同，均视为同一笔业务的重复提交，返回已处理的凭证结果
+  - 如果调用方需要对同一笔业务发起不同类型的记账（如转账 + 手续费），应在一次 postAccounting 调用中通过 entries 一并提交，而非拆成多次调用
+  - 如果确实是独立的业务动作，调用方应分配不同的 bizNo
 - 幂等记录持久化，不依赖缓存
+- 幂等判断时，若 bizNo + channelCode 已存在但本次请求的 bizType 或 entries 与已有记录不一致，返回幂等冲突错误（IDEMPOTENCY_CONFLICT），而非静默返回旧结果，防止调用方误用
 
 ### FR-7: 全额冲正
 
@@ -338,9 +344,9 @@ lifecycle == ACTIVE
 
 | 场景 | 冻结操作 | 标志位操作 |
 |------|---------|-----------|
-| 预授权冻结 | freeze(amount, PRE_AUTH) | 不设标志位 |
+| 预授权冻结 | freeze(biz_freeze_no, amount, PRE_AUTH) | 不设标志位 |
 | 风控止付 | 不冻结金额 | debit_blocked = true |
-| 司法冻结 | freeze(amount, JUDICIAL) | debit_blocked + credit_blocked = true |
+| 司法冻结 | freeze(biz_freeze_no, amount, JUDICIAL) | debit_blocked + credit_blocked = true |
 | 反诈止付 | 不冻结金额 | debit_blocked = true |
 
 **销户前校验**：
@@ -373,7 +379,9 @@ lifecycle == ACTIVE
 
 | 字段 | 说明 |
 |------|------|
-| freeze_id | 冻结明细 ID |
+| freeze_id | 冻结明细内部 ID（Snowflake，不对外暴露） |
+| freeze_no | 冻结业务编号（系统生成，对外返回给调用方，解冻/预授权完成时凭此编号操作） |
+| biz_freeze_no | 调用方业务冻结流水号（调用方传入，与 freeze_source 组成复合幂等键） |
 | account_id | 账户 ID |
 | currency | 币种（ISO 4217，Phase 1 仅 CNY） |
 | freeze_amount | 冻结金额 |
@@ -383,20 +391,26 @@ lifecycle == ACTIVE
 | freeze_time | 冻结时间 |
 | unfreeze_time | 解冻时间（null 表示未解冻） |
 
-### FR-10: 虚拟子账户
+**冻结标识设计**：
+- `freeze_id`：内部主键，仅用于聚合内部和持久化，不对外暴露
+- `freeze_no`：系统生成的业务冻结编号，冻结成功后返回给调用方。调用方后续解冻、预授权完成等操作必须传入 freeze_no 来精确匹配冻结明细
+- `biz_freeze_no`：调用方传入的业务流水号，与 `freeze_source` 组成复合幂等键，防止同一笔冻结请求重复执行。相同 biz_freeze_no + freeze_source 重复提交返回已处理的 freeze_no
+
+### FR-10: 子账户（资金隔离型）
 
 参考 `#[[file:.governance/references/business/虚拟子账户设计决策.md]]`：
 
-**资金隔离型（SUB_REAL）**：
-- 独立 account_id，parent_account_id 关联主账户
-- 独立余额，可独立记账
-- 主账户余额 = Σ 子账户余额
+Phase 1 仅实现资金隔离型子账户（SUB_REAL）。记账隔离型（核算维度）需求放到 Phase 2，届时通过独立的 Ledger Dimension 表实现，不复用 Account 模型。
 
-**记账隔离型（VIRTUAL）**：
-- 独立 account_id，parent_account_id 关联主账户
-- 虚拟余额（dimension_balance），资金实际在主账户
-- 记账时更新主账户真实余额 + 子账户虚拟余额
-- 虚拟账户不可直接出金
+**资金隔离型（SUB_REAL）**：
+- 独立 account_id 和 account_no，parent_account_id 关联主账户
+- 独立余额（balance / available_balance / frozen_amount），与 MAIN 账户数据模型一致
+- 主账户余额 = Σ 子账户余额（INV-03）
+- 子账户每次 debit/credit 时，同事务内同步更新主账户 balance，确保 INV-03 始终成立
+- 记账分录 account_id = 子账户自身（资金归属方），主账户余额更新为派生联动，不额外生成分录
+- 主账户自身不可直接记账（有 SUB_REAL 子账户时），所有资金操作必须通过子账户进行
+- 子账户支持完整的冻结/解冻、状态管理、存款计息等能力，行为与 MAIN 账户一致
+- 并发控制：子账户记账时同事务内锁自身 version + 主账户 version（双锁）
 
 ### FR-11: 日终处理
 
@@ -427,7 +441,7 @@ lifecycle == ACTIVE
 - 标识：account_id（Snowflake）
 - 核心字段：account_no、account_type、owner_type、owner_id、parent_account_id、subject_code、currency、balance、available_balance、frozen_amount、lifecycle_status、debit_blocked、credit_blocked、activity_status、version
 - 值对象：Money（金额）、AccountNo（账户号码）
-- 实体：FreezeRecord（冻结明细，聚合内实体）
+- 实体：FreezeRecord（冻结明细，聚合内实体，含 freeze_no 业务编号）
 
 **并发控制**：乐观锁（version 字段），每次更新时 `WHERE version = ?`，冲突时抛 OptimisticLockException，应用服务层最多重试 2 次。Phase 2 针对热点账户（手续费收入户、清算过渡户等）引入异步合并记账优化。
 
@@ -441,9 +455,9 @@ lifecycle == ACTIVE
 - open()：开户
 - credit(amount)：入账（增加余额，校验 credit_blocked）
 - debit(amount)：出账（减少余额，校验 debit_blocked 和可用余额）
-- freeze(amount, type, reason, source)：冻结
-- unfreeze(freezeId)：解冻
-- debitWithUnfreeze(freezeId, amount)：解冻并扣款（原子操作，预授权完成场景）
+- freeze(biz_freeze_no, amount, type, reason, source)：冻结，返回 freeze_no
+- unfreeze(freezeNo)：按 freeze_no 解冻
+- debitWithUnfreeze(freezeNo, amount)：按 freeze_no 解冻并扣款（原子操作，预授权完成场景）
 - blockDebit(reason)：设置禁止出账
 - unblockDebit()：解除禁止出账
 - blockCredit(reason)：设置禁止入账
@@ -587,6 +601,7 @@ lifecycle == ACTIVE
 | 贷款计息 | 由信贷核心负责 | — |
 | 前端/管理后台 | 专注后端微服务 | — |
 | 额度控制型子账户 | 由额度中心负责 | — |
+| 记账隔离型子账户（VIRTUAL） | Phase 1 无明确业务场景，数据模型与 SUB_REAL 高度重合无法真正避免账户膨胀，核算维度需求 Phase 2 用独立 Ledger Dimension 表实现 | Phase 2 |
 | compliance_status | 合规状态维度，Phase 2 补充 | Phase 2 |
 | 热点账户异步合并记账 | Phase 1 乐观锁足够 | Phase 2 |
 | 全量余额快照 | Phase 1 增量快照足够 | Phase 2 |
@@ -602,6 +617,7 @@ lifecycle == ACTIVE
 | 批量记账 | 异步 MQ | 按需优化吞吐 |
 | 并发控制 | 乐观锁（version 字段） | Phase 2 热点账户异步合并记账 |
 | 余额快照 | 增量快照（仅当日有发生额的账户） | Phase 2 按需补全量快照或加缓存 |
+| 核算维度（记账隔离） | Phase 1 不做，仅支持资金隔离型子账户 | Phase 2 独立 Ledger Dimension 表，不复用 Account 模型 |
 
 ## 开放问题
 
@@ -616,6 +632,7 @@ lifecycle == ACTIVE
 - `#[[file:.governance/references/business/账户状态机设计决策.md]]`
 - `#[[file:.governance/references/business/账户状态标志位模型演进决策.md]]`
 - `#[[file:.governance/references/business/账务系统科目体系设计决策.md]]`
+- `#[[file:.governance/references/business/银行会计科目权威枚举.md]]`
 - `#[[file:.governance/references/business/虚拟子账户设计决策.md]]`
 - `#[[file:.governance/references/business/计息职责归属决策.md]]`
 - `#[[file:.governance/references/business/存款计息跨域数据依赖决策.md]]`
